@@ -1,0 +1,17 @@
+{
+  "name": "color",
+  "version": "1.0.0",
+  "description": "图片颜色提取工具",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "serve": "npx serve ."
+  },
+  "keywords": ["color", "image", "palette"],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "typescript": "^6.0.2"
+  }
+}

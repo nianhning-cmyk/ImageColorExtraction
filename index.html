@@ -15,10 +15,19 @@
       background: #1a1a2e;
       color: #eee;
       min-height: 100vh;
+      padding: 40px 20px;
+    }
+    .main-container {
+      display: flex;
+      gap: 30px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    .content-area {
+      flex: 1;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 40px 20px;
     }
     h1 {
       font-size: 24px;
@@ -100,21 +109,199 @@
   </style>
 </head>
 <body>
-  <h1>图片颜色提取</h1>
+  <div class="main-container">
+    <div class="content-area">
+      <h1>图片颜色提取</h1>
+      <div class="upload-area" id="uploadArea">
+        <input type="file" id="fileInput" accept="image/*" multiple>
+        <div class="upload-icon">🖼️</div>
+        <div class="upload-text">点击或拖拽上传图片（支持多张）</div>
+      </div>
+      <div class="images-grid" id="imagesGrid"></div>
+    </div>
 
-  <div class="upload-area" id="uploadArea">
-    <input type="file" id="fileInput" accept="image/*" multiple>
-    <div class="upload-icon">🖼️</div>
-    <div class="upload-text">点击或拖拽上传图片（支持多张）</div>
+    <div class="config-panel">
+      <h2>配置选项</h2>
+      <div class="config-grid">
+        <div class="config-item">
+          <label for="colorCount">颜色数量</label>
+          <input type="number" id="colorCount" min="1" max="10" value="5">
+        </div>
+        <div class="config-item">
+          <label for="sampleStep">采样步长</label>
+          <input type="number" id="sampleStep" min="1" max="10" value="4">
+        </div>
+        <div class="config-item">
+          <label for="resizeSize">降维尺寸</label>
+          <input type="number" id="resizeSize" min="50" max="300" value="150">
+        </div>
+        <div class="config-item">
+          <label for="hBins">色相分箱</label>
+          <input type="number" id="hBins" min="8" max="48" value="24">
+        </div>
+        <div class="config-item">
+          <label for="sBins">饱和度分箱</label>
+          <input type="number" id="sBins" min="2" max="10" value="6">
+        </div>
+        <div class="config-item">
+          <label for="vBins">明度分箱</label>
+          <input type="number" id="vBins" min="2" max="10" value="6">
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div class="images-grid" id="imagesGrid"></div>
+  <style>
+    .config-panel {
+      position: sticky;
+      top: 20px;
+      width: 320px;
+      flex-shrink: 0;
+      background: #252542;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      align-self: flex-start;
+      max-height: calc(100vh - 40px);
+      overflow-y: auto;
+    }
+    @media (max-width: 1024px) {
+      .main-container {
+        flex-direction: column;
+      }
+      .config-panel {
+        position: static;
+        width: 100%;
+        max-width: 500px;
+      }
+    }
+    .config-panel h2 {
+      font-size: 18px;
+      font-weight: 500;
+      margin-bottom: 16px;
+      color: #eee;
+    }
+    .config-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+    }
+    .config-item {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .config-item label {
+      font-size: 13px;
+      color: #aaa;
+      font-weight: 500;
+    }
+    .config-item input {
+      padding: 8px 12px;
+      background: #1a1a3a;
+      border: 1px solid #4a4a6a;
+      border-radius: 6px;
+      color: #eee;
+      font-size: 14px;
+      transition: border-color 0.3s;
+    }
+    .config-item input:focus {
+      outline: none;
+      border-color: #7a7aaa;
+    }
+    .color-palette {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+    }
+    .color-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 8px;
+    }
+    .color-block {
+      width: 40px;
+      height: 40px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      flex-shrink: 0;
+    }
+    .color-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .color-hex {
+      font-size: 14px;
+      font-weight: 600;
+      font-family: 'Courier New', monospace;
+    }
+    .color-rgb {
+      font-size: 11px;
+      color: #aaa;
+    }
+  </style>
+  <script type="module" src="dist/main.js"></script>
+  <script type="module">
+    import { getMainColors, rgbToHex } from './dist/main.js';
 
-  <script src="main.js"></script>
-  <script>
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('fileInput');
     const imagesGrid = document.getElementById('imagesGrid');
+    
+    // 配置元素
+    const colorCount = document.getElementById('colorCount');
+    const sampleStep = document.getElementById('sampleStep');
+    const resizeSize = document.getElementById('resizeSize');
+    const hBins = document.getElementById('hBins');
+    const sBins = document.getElementById('sBins');
+    const vBins = document.getElementById('vBins');
+    
+    // 存储已加载的图片数据
+    const loadedImages = [];
+
+    // 监听配置变化
+    const configInputs = [colorCount, sampleStep, resizeSize, hBins, sBins, vBins];
+    configInputs.forEach(input => {
+      input.addEventListener('change', () => {
+        // 配置变化后重新处理所有已加载的图片
+        loadedImages.forEach(({ src }) => {
+          const img = new Image();
+          img.onload = () => {
+            const colors = getMainColors(img, getConfig());
+            // 找到对应的卡片并更新
+            const card = Array.from(imagesGrid.children).find(el => 
+              el.querySelector('img')?.src === src
+            );
+            if (card) {
+              const colorPalette = colors.map(rgb => {
+                const hex = rgbToHex(rgb);
+                return `
+                  <div class="color-item">
+                    <div class="color-block" style="background-color: ${hex}"></div>
+                    <div class="color-text">
+                      <div class="color-hex">${hex}</div>
+                      <div class="color-rgb">RGB(${rgb[0]}, ${rgb[1]}, ${rgb[2]})</div>
+                    </div>
+                  </div>
+                `;
+              }).join('');
+              
+              const paletteContainer = card.querySelector('.color-palette');
+              if (paletteContainer) {
+                paletteContainer.innerHTML = colorPalette;
+              }
+            }
+          };
+          img.src = src;
+        });
+      });
+    });
 
     uploadArea.addEventListener('click', () => fileInput.click());
 
@@ -138,31 +325,52 @@
       Array.from(e.target.files).forEach(handleFile);
     });
 
+    function getConfig() {
+      return {
+        colorCount: parseInt(colorCount.value) || 5,
+        sampleStep: parseInt(sampleStep.value) || 4,
+        resizeSize: parseInt(resizeSize.value) || 150,
+        hBins: parseInt(hBins.value) || 24,
+        sBins: parseInt(sBins.value) || 6,
+        vBins: parseInt(vBins.value) || 6
+      };
+    }
+
     function handleFile(file) {
       const reader = new FileReader();
       reader.onload = (e) => {
         const img = new Image();
         img.onload = () => {
-          const color = getMainColor(img);
-          const hex = rgbToHex(color);
-          addImageCard(e.target.result, hex, color);
+          const colors = getMainColors(img, getConfig());
+          addImageCard(e.target.result, colors);
+          loadedImages.push({ src: e.target.result });
         };
         img.src = e.target.result;
       };
       reader.readAsDataURL(file);
     }
 
-    function addImageCard(src, hex, rgb) {
+    function addImageCard(src, colors) {
       const card = document.createElement('div');
       card.className = 'image-card';
+      
+      const colorPalette = colors.map(rgb => {
+        const hex = rgbToHex(rgb);
+        return `
+          <div class="color-item">
+            <div class="color-block" style="background-color: ${hex}"></div>
+            <div class="color-text">
+              <div class="color-hex">${hex}</div>
+              <div class="color-rgb">RGB(${rgb[0]}, ${rgb[1]}, ${rgb[2]})</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      
       card.innerHTML = `
         <img src="${src}" alt="预览">
-        <div class="color-info">
-          <div class="color-block" style="background-color: ${hex}"></div>
-          <div class="color-text">
-            <div class="color-hex">${hex}</div>
-            <div class="color-rgb">RGB(${rgb[0]}, ${rgb[1]}, ${rgb[2]})</div>
-          </div>
+        <div class="color-palette">
+          ${colorPalette}
         </div>
       `;
       imagesGrid.appendChild(card);
