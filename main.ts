@@ -20,6 +20,18 @@ export interface ColorExtractionOptions {
   maxValue?: number;
   /** 降维后的尺寸（默认：150） */
   resizeSize?: number;
+  /** 是否使用随机采样增加稳定性（默认：true） */
+  useRandomSample?: boolean;
+  /** 随机采样种子（可选，用于复现结果） */
+  randomSeed?: number;
+  /** 最小采样像素数（默认：1000） */
+  minSamplePixels?: number;
+  /** 是否应用模糊预处理（默认：true） */
+  useBlur?: boolean;
+  /** 模糊半径（默认：0.5） */
+  blurRadius?: number;
+  /** 颜色相似度阈值，用于去重（默认：30，范围0-255） */
+  colorDistanceThreshold?: number;
 }
 
 /**
@@ -54,6 +66,12 @@ const DEFAULT_OPTIONS: Required<ColorExtractionOptions> = {
   minValue: 0.15,
   maxValue: 0.95,
   resizeSize: 150,
+  useRandomSample: true,
+  randomSeed: 42,
+  minSamplePixels: 1000,
+  useBlur: true,
+  blurRadius: 0.5,
+  colorDistanceThreshold: 30,
 };
 
 /**
@@ -79,10 +97,18 @@ export function getMainColors(
   const size = config.resizeSize;
   canvas.width = size;
   canvas.height = size;
-  ctx.drawImage(img, 0, 0, size, size);
+  
+  // 应用轻微模糊减少插值噪声（可选）
+  if (config.useBlur) {
+    ctx.filter = `blur(${config.blurRadius}px)`;
+    ctx.drawImage(img, 0, 0, size, size);
+    ctx.filter = 'none';
+  } else {
+    ctx.drawImage(img, 0, 0, size, size);
+  }
 
   const { data } = ctx.getImageData(0, 0, size, size);
-  const pixels = samplePixels(data, config.sampleStep);
+  const pixels = samplePixels(data, config);
 
   if (pixels.length === 0) {
     return [[128, 128, 128]];
@@ -92,25 +118,76 @@ export function getMainColors(
 }
 
 /**
- * 采样像素（使用随机采样避免周期性偏差）
+ * 简单的伪随机数生成器（可复现）
  */
-function samplePixels(data: Uint8ClampedArray, sampleStep: number): RGB[] {
+function seededRandom(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = Math.sin(s) * 10000;
+    return s - Math.floor(s);
+  };
+}
+
+/**
+ * 采样像素（使用随机采样增加稳定性）
+ */
+function samplePixels(data: Uint8ClampedArray, config: Required<ColorExtractionOptions>): RGB[] {
+  const { sampleStep, useRandomSample, randomSeed, minSamplePixels } = config;
   const pixels: RGB[] = [];
   const totalPixels = data.length / 4;
   
-  for (let i = 0; i < totalPixels; i++) {
-    if (i % sampleStep !== 0) continue;
+  if (useRandomSample) {
+    // 随机采样模式：确保每次采样的像素数量稳定
+    const random = seededRandom(randomSeed);
+    const sampleInterval = Math.max(1, Math.floor(sampleStep * (0.8 + random() * 0.4)));
     
-    const idx = i * 4;
-    const r = data[idx];
-    const g = data[idx + 1];
-    const b = data[idx + 2];
-    const a = data[idx + 3];
+    // 计算需要采样的像素索引
+    const indices: number[] = [];
+    for (let i = 0; i < totalPixels; i += sampleInterval) {
+      // 添加小的随机偏移
+      const offset = Math.floor((random() - 0.5) * sampleInterval * 0.5);
+      const idx = Math.max(0, Math.min(totalPixels - 1, i + offset));
+      indices.push(idx);
+    }
+    
+    // 如果采样点太少，降低采样间隔
+    if (indices.length < minSamplePixels) {
+      const adjustedInterval = Math.max(1, Math.floor(totalPixels / minSamplePixels));
+      indices.length = 0;
+      for (let i = 0; i < totalPixels; i += adjustedInterval) {
+        indices.push(i);
+      }
+    }
+    
+    // 收集像素
+    for (const i of indices) {
+      const idx = i * 4;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const a = data[idx + 3];
 
-    if (a < 128) continue;
-    if (isTooDark(r, g, b) || isTooLight(r, g, b)) continue;
+      if (a < 128) continue;
+      if (isTooDark(r, g, b) || isTooLight(r, g, b)) continue;
 
-    pixels.push([r, g, b]);
+      pixels.push([r, g, b]);
+    }
+  } else {
+    // 固定步长采样模式（原始方式）
+    for (let i = 0; i < totalPixels; i++) {
+      if (i % sampleStep !== 0) continue;
+      
+      const idx = i * 4;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const a = data[idx + 3];
+
+      if (a < 128) continue;
+      if (isTooDark(r, g, b) || isTooLight(r, g, b)) continue;
+
+      pixels.push([r, g, b]);
+    }
   }
 
   return pixels;
@@ -130,37 +207,65 @@ function extractDominantColors(pixels: RGB[], config: Required<ColorExtractionOp
       continue;
     }
 
-    const hIdx = Math.min(Math.floor(h * config.hBins), config.hBins - 1);
-    const sIdx = Math.min(Math.floor(s * config.sBins), config.sBins - 1);
-    const vIdx = Math.min(Math.floor(v * config.vBins), config.vBins - 1);
-    const key = `${hIdx},${sIdx},${vIdx}`;
+    // 使用软分箱：每个像素同时计入相邻的 bin（权重衰减）
+    const hIdx = Math.floor(h * config.hBins);
+    const sIdx = Math.floor(s * config.sBins);
+    const vIdx = Math.floor(v * config.vBins);
 
-    if (!histogram.has(key)) {
-      histogram.set(key, { count: 0, pixels: [], originalPixels: [] });
+    // 主 bin
+    const mainKey = `${hIdx},${sIdx},${vIdx}`;
+    addToHistogram(histogram, mainKey, hsv, 1.0);
+
+    // 邻近 bin（软边界处理）- 降低色相权重避免过度扩散
+    const neighbors = [
+      [hIdx - 1, sIdx, vIdx, 0.15], // 色相相邻：0.15（降低）
+      [hIdx + 1, sIdx, vIdx, 0.15],
+      [hIdx, sIdx - 1, vIdx, 0.2],  // 饱和度相邻：0.2
+      [hIdx, sIdx + 1, vIdx, 0.2],
+      [hIdx, sIdx, vIdx - 1, 0.1],  // 明度相邻：0.1（最低）
+      [hIdx, sIdx, vIdx + 1, 0.1],
+    ];
+
+    for (const [nh, ns, nv, weight] of neighbors) {
+      if (nh >= 0 && nh < config.hBins && 
+          ns >= 0 && ns < config.sBins && 
+          nv >= 0 && nv < config.vBins) {
+        addToHistogram(histogram, `${nh},${ns},${nv}`, hsv, weight);
+      }
     }
-    
-    const bin = histogram.get(key)!;
-    bin.count++;
-    bin.pixels.push(hsv);
-    bin.originalPixels.push(hsvToRgb(hsv));
   }
 
   if (histogram.size === 0) {
     return [getAverageColor(pixels)];
   }
 
-  const sortedBins = Array.from(histogram.entries())
-    .sort((a, b) => b[1].count - a[1].count);
+  // 改进排序：结合 count 和颜色紧凑度（方差越小越优先）
+  const scoredBins = Array.from(histogram.entries()).map(([key, bin]) => {
+    const variance = calculateHSVVariance(bin.pixels);
+    // 分数 = count * (1 / (1 + variance))，方差越小分数越高
+    const score = bin.count * (1 / (1 + variance));
+    return { key, bin, score };
+  });
+  
+  const sortedBins = scoredBins.sort((a, b) => b.score - a.score);
 
   const result: RGB[] = [];
   
-  for (let i = 0; i < Math.min(config.colorCount, sortedBins.length); i++) {
-    const bin = sortedBins[i][1];
-    
+  for (const { bin } of sortedBins) {
+    if (result.length >= config.colorCount) break;
     if (bin.pixels.length === 0) continue;
     
     const avgHsv = averageHSV(bin.pixels);
-    result.push(hsvToRgb(avgHsv));
+    const color = hsvToRgb(avgHsv);
+    
+    // 颜色去重：检查是否与已选颜色过于相似
+    const isDuplicate = result.some(existingColor => 
+      colorDistance(color, existingColor) < config.colorDistanceThreshold
+    );
+    
+    if (!isDuplicate) {
+      result.push(color);
+    }
   }
 
   if (result.length === 0) {
@@ -168,6 +273,63 @@ function extractDominantColors(pixels: RGB[], config: Required<ColorExtractionOp
   }
 
   return result;
+}
+
+/**
+ * 添加像素到直方图（带权重）
+ */
+function addToHistogram(
+  histogram: Map<string, ColorBin>, 
+  key: string, 
+  hsv: HSV, 
+  weight: number
+): void {
+  if (!histogram.has(key)) {
+    histogram.set(key, { count: 0, pixels: [], originalPixels: [] });
+  }
+  
+  const bin = histogram.get(key)!;
+  bin.count += weight;
+  bin.pixels.push(hsv);
+  bin.originalPixels.push(hsvToRgb(hsv));
+}
+
+/**
+ * 计算 HSV 方差（衡量颜色紧凑度）
+ */
+function calculateHSVVariance(hsvPixels: HSV[]): number {
+  if (hsvPixels.length < 2) return 0;
+  
+  // 计算平均值
+  const avgH = hsvPixels.reduce((sum, [h]) => sum + h, 0) / hsvPixels.length;
+  const avgS = hsvPixels.reduce((sum, [, s]) => sum + s, 0) / hsvPixels.length;
+  const avgV = hsvPixels.reduce((sum, [, , v]) => sum + v, 0) / hsvPixels.length;
+  
+  // 计算方差（色相需要特殊处理环形特性）
+  let hVariance = 0;
+  for (const [h] of hsvPixels) {
+    const diff = Math.abs(h - avgH);
+    // 处理色相环绕（0和1是相邻的）
+    const wrappedDiff = Math.min(diff, 1 - diff);
+    hVariance += wrappedDiff * wrappedDiff;
+  }
+  hVariance /= hsvPixels.length;
+  
+  const sVariance = hsvPixels.reduce((sum, [, s]) => sum + (s - avgS) ** 2, 0) / hsvPixels.length;
+  const vVariance = hsvPixels.reduce((sum, [, , v]) => sum + (v - avgV) ** 2, 0) / hsvPixels.length;
+  
+  // 加权组合（色相权重更高，因为人对色相更敏感）
+  return hVariance * 2 + sVariance + vVariance;
+}
+
+/**
+ * 计算两个 RGB 颜色的欧几里得距离
+ */
+function colorDistance(c1: RGB, c2: RGB): number {
+  const dr = c1[0] - c2[0];
+  const dg = c1[1] - c2[1];
+  const db = c1[2] - c2[2];
+  return Math.sqrt(dr * dr + dg * dg + db * db);
 }
 
 /**
