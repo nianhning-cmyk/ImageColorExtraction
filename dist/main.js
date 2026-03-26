@@ -37,30 +37,29 @@ export function getMainColors(img, options = {}) {
         console.error('Failed to get 2D context');
         return [FALLBACK_COLOR];
     }
-    const size = config.resizeSize;
-    canvas.width = size;
-    canvas.height = size;
+    const maxDim = config.resizeSize;
     const imgRatio = img.naturalWidth / img.naturalHeight;
-    const canvasRatio = size / size;
-    let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
-    if (imgRatio > canvasRatio) {
-        sw = img.naturalHeight * canvasRatio;
-        sx = (img.naturalWidth - sw) / 2;
+    let canvasWidth, canvasHeight;
+    if (imgRatio > 1) {
+        canvasWidth = maxDim;
+        canvasHeight = Math.round(maxDim / imgRatio);
     }
-    else if (imgRatio < canvasRatio) {
-        sh = img.naturalWidth / canvasRatio;
-        sy = (img.naturalHeight - sh) / 2;
+    else {
+        canvasHeight = maxDim;
+        canvasWidth = Math.round(maxDim * imgRatio);
     }
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
     if (config.useBlur) {
         ctx.filter = `blur(${config.blurRadius}px)`;
-        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, size, size);
+        ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight);
         ctx.filter = 'none';
     }
     else {
-        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, size, size);
+        ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight);
     }
-    const { data } = ctx.getImageData(0, 0, size, size);
-    const pixels = samplePixels(data, config);
+    const { data } = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+    const pixels = samplePixels(data, config, canvasWidth * canvasHeight);
     if (pixels.length === 0) {
         return [FALLBACK_COLOR];
     }
@@ -82,13 +81,15 @@ function seededRandom(seed) {
 /**
  * 采样像素（使用随机采样增加稳定性）
  */
-function samplePixels(data, config) {
+function samplePixels(data, config, actualPixels) {
     const { sampleStep, useRandomSample, randomSeed, minSamplePixels, ignoreTransparency } = config;
     const pixels = [];
     const totalPixels = data.length / 4;
+    const expectedPixels = config.resizeSize * config.resizeSize;
+    const adjustedStep = sampleStep * (actualPixels / expectedPixels);
     if (useRandomSample) {
         const random = seededRandom(randomSeed);
-        const sampleInterval = Math.max(1, Math.floor(sampleStep * (0.8 + random() * 0.4)));
+        const sampleInterval = Math.max(1, Math.floor(adjustedStep * (0.8 + random() * 0.4)));
         const indices = [];
         for (let i = 0; i < totalPixels; i += sampleInterval) {
             const offset = Math.floor((random() - 0.5) * sampleInterval * 0.5);
@@ -117,7 +118,7 @@ function samplePixels(data, config) {
     }
     else {
         for (let i = 0; i < totalPixels; i++) {
-            if (i % sampleStep !== 0)
+            if (i % Math.round(adjustedStep) !== 0)
                 continue;
             const idx = i * 4;
             const r = data[idx];
