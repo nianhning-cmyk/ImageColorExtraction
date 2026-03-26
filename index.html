@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>图片颜色提取</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 500;
+      margin-bottom: 30px;
+    }
+    .upload-area {
+      width: 100%;
+      max-width: 500px;
+      border: 2px dashed #4a4a6a;
+      border-radius: 16px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.3s;
+      margin-bottom: 30px;
+    }
+    .upload-area:hover {
+      border-color: #7a7aaa;
+    }
+    .upload-area input {
+      display: none;
+    }
+    .upload-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    .upload-text {
+      font-size: 16px;
+      color: #aaa;
+    }
+    .images-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 20px;
+      width: 100%;
+      max-width: 900px;
+    }
+    .image-card {
+      background: #252542;
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+    .image-card img {
+      width: 100%;
+      height: 150px;
+      object-fit: cover;
+      border-radius: 8px;
+    }
+    .color-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .color-block {
+      width: 48px;
+      height: 48px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    .color-text {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .color-hex {
+      font-size: 16px;
+      font-weight: 600;
+      font-family: 'Courier New', monospace;
+    }
+    .color-rgb {
+      font-size: 12px;
+      color: #aaa;
+    }
+  </style>
+</head>
+<body>
+  <h1>图片颜色提取</h1>
+
+  <div class="upload-area" id="uploadArea">
+    <input type="file" id="fileInput" accept="image/*" multiple>
+    <div class="upload-icon">🖼️</div>
+    <div class="upload-text">点击或拖拽上传图片（支持多张）</div>
+  </div>
+
+  <div class="images-grid" id="imagesGrid"></div>
+
+  <script src="main.js"></script>
+  <script>
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+    const imagesGrid = document.getElementById('imagesGrid');
+
+    uploadArea.addEventListener('click', () => fileInput.click());
+
+    uploadArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadArea.style.borderColor = '#7a7aaa';
+    });
+
+    uploadArea.addEventListener('dragleave', () => {
+      uploadArea.style.borderColor = '#4a4a6a';
+    });
+
+    uploadArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadArea.style.borderColor = '#4a4a6a';
+      const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+      files.forEach(handleFile);
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      Array.from(e.target.files).forEach(handleFile);
+    });
+
+    function handleFile(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const color = getMainColor(img);
+          const hex = rgbToHex(color);
+          addImageCard(e.target.result, hex, color);
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function addImageCard(src, hex, rgb) {
+      const card = document.createElement('div');
+      card.className = 'image-card';
+      card.innerHTML = `
+        <img src="${src}" alt="预览">
+        <div class="color-info">
+          <div class="color-block" style="background-color: ${hex}"></div>
+          <div class="color-text">
+            <div class="color-hex">${hex}</div>
+            <div class="color-rgb">RGB(${rgb[0]}, ${rgb[1]}, ${rgb[2]})</div>
+          </div>
+        </div>
+      `;
+      imagesGrid.appendChild(card);
+    }
+  </script>
+</body>
+</html>
