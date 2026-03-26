@@ -32,6 +32,8 @@ export interface ColorExtractionOptions {
   blurRadius?: number;
   /** 颜色相似度阈值，用于去重（默认：30，范围0-255） */
   colorDistanceThreshold?: number;
+  /** 是否忽略透明像素（默认：true） */
+  ignoreTransparency?: boolean;
 }
 
 /**
@@ -51,7 +53,13 @@ interface ColorBin {
   count: number;
   pixels: HSV[];
   originalPixels: RGB[];
+  avgColor: RGB;
 }
+
+/**
+ * 默认 fallback 颜色
+ */
+const FALLBACK_COLOR: RGB = [128, 128, 128];
 
 /**
  * 默认配置
@@ -72,6 +80,7 @@ const DEFAULT_OPTIONS: Required<ColorExtractionOptions> = {
   useBlur: true,
   blurRadius: 0.5,
   colorDistanceThreshold: 30,
+  ignoreTransparency: true,
 };
 
 /**
@@ -85,46 +94,60 @@ export function getMainColors(
   options: ColorExtractionOptions = {}
 ): RGB[] {
   const config = { ...DEFAULT_OPTIONS, ...options };
-  
+
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  
+
   if (!ctx) {
     console.error('Failed to get 2D context');
-    return [[128, 128, 128]];
+    return [FALLBACK_COLOR];
   }
 
   const size = config.resizeSize;
   canvas.width = size;
   canvas.height = size;
-  
-  // 应用轻微模糊减少插值噪声（可选）
+
+  const imgRatio = img.naturalWidth / img.naturalHeight;
+  const canvasRatio = size / size;
+  let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+
+  if (imgRatio > canvasRatio) {
+    sw = img.naturalHeight * canvasRatio;
+    sx = (img.naturalWidth - sw) / 2;
+  } else if (imgRatio < canvasRatio) {
+    sh = img.naturalWidth / canvasRatio;
+    sy = (img.naturalHeight - sh) / 2;
+  }
+
   if (config.useBlur) {
     ctx.filter = `blur(${config.blurRadius}px)`;
-    ctx.drawImage(img, 0, 0, size, size);
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, size, size);
     ctx.filter = 'none';
   } else {
-    ctx.drawImage(img, 0, 0, size, size);
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, size, size);
   }
 
   const { data } = ctx.getImageData(0, 0, size, size);
   const pixels = samplePixels(data, config);
 
   if (pixels.length === 0) {
-    return [[128, 128, 128]];
+    return [FALLBACK_COLOR];
   }
 
   return extractDominantColors(pixels, config);
 }
 
 /**
- * 简单的伪随机数生成器（可复现）
+ * Mulberry32 伪随机数生成器（高质量、可复现）
  */
 function seededRandom(seed: number): () => number {
   let s = seed;
   return () => {
-    s = Math.sin(s) * 10000;
-    return s - Math.floor(s);
+    s |= 0;
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
@@ -132,25 +155,21 @@ function seededRandom(seed: number): () => number {
  * 采样像素（使用随机采样增加稳定性）
  */
 function samplePixels(data: Uint8ClampedArray, config: Required<ColorExtractionOptions>): RGB[] {
-  const { sampleStep, useRandomSample, randomSeed, minSamplePixels } = config;
+  const { sampleStep, useRandomSample, randomSeed, minSamplePixels, ignoreTransparency } = config;
   const pixels: RGB[] = [];
   const totalPixels = data.length / 4;
-  
+
   if (useRandomSample) {
-    // 随机采样模式：确保每次采样的像素数量稳定
     const random = seededRandom(randomSeed);
     const sampleInterval = Math.max(1, Math.floor(sampleStep * (0.8 + random() * 0.4)));
-    
-    // 计算需要采样的像素索引
+
     const indices: number[] = [];
     for (let i = 0; i < totalPixels; i += sampleInterval) {
-      // 添加小的随机偏移
       const offset = Math.floor((random() - 0.5) * sampleInterval * 0.5);
       const idx = Math.max(0, Math.min(totalPixels - 1, i + offset));
       indices.push(idx);
     }
-    
-    // 如果采样点太少，降低采样间隔
+
     if (indices.length < minSamplePixels) {
       const adjustedInterval = Math.max(1, Math.floor(totalPixels / minSamplePixels));
       indices.length = 0;
@@ -158,8 +177,7 @@ function samplePixels(data: Uint8ClampedArray, config: Required<ColorExtractionO
         indices.push(i);
       }
     }
-    
-    // 收集像素
+
     for (const i of indices) {
       const idx = i * 4;
       const r = data[idx];
@@ -167,23 +185,22 @@ function samplePixels(data: Uint8ClampedArray, config: Required<ColorExtractionO
       const b = data[idx + 2];
       const a = data[idx + 3];
 
-      if (a < 128) continue;
+      if (ignoreTransparency && a < 128) continue;
       if (isTooDark(r, g, b) || isTooLight(r, g, b)) continue;
 
       pixels.push([r, g, b]);
     }
   } else {
-    // 固定步长采样模式（原始方式）
     for (let i = 0; i < totalPixels; i++) {
       if (i % sampleStep !== 0) continue;
-      
+
       const idx = i * 4;
       const r = data[idx];
       const g = data[idx + 1];
       const b = data[idx + 2];
       const a = data[idx + 3];
 
-      if (a < 128) continue;
+      if (ignoreTransparency && a < 128) continue;
       if (isTooDark(r, g, b) || isTooLight(r, g, b)) continue;
 
       pixels.push([r, g, b]);
@@ -239,32 +256,31 @@ function extractDominantColors(pixels: RGB[], config: Required<ColorExtractionOp
     return [getAverageColor(pixels)];
   }
 
-  // 改进排序：结合 count 和颜色紧凑度（方差越小越优先）
   const scoredBins = Array.from(histogram.entries()).map(([key, bin]) => {
     const variance = calculateHSVVariance(bin.pixels);
-    // 分数 = count * (1 / (1 + variance))，方差越小分数越高
     const score = bin.count * (1 / (1 + variance));
-    return { key, bin, score };
+    const avgHsv = averageHSV(bin.pixels);
+    const avgColor = hsvToRgb(avgHsv);
+    return { key, bin, score, avgColor, avgHsv };
   });
-  
-  const sortedBins = scoredBins.sort((a, b) => b.score - a.score);
+
+  scoredBins.sort((a, b) => b.score - a.score);
 
   const result: RGB[] = [];
-  
-  for (const { bin } of sortedBins) {
+  const minDistSq = config.colorDistanceThreshold * config.colorDistanceThreshold;
+
+  for (const scored of scoredBins) {
     if (result.length >= config.colorCount) break;
-    if (bin.pixels.length === 0) continue;
-    
-    const avgHsv = averageHSV(bin.pixels);
-    const color = hsvToRgb(avgHsv);
-    
-    // 颜色去重：检查是否与已选颜色过于相似
-    const isDuplicate = result.some(existingColor => 
-      colorDistance(color, existingColor) < config.colorDistanceThreshold
-    );
-    
+
+    const isDuplicate = result.some(existing => {
+      const dr = scored.avgColor[0] - existing[0];
+      const dg = scored.avgColor[1] - existing[1];
+      const db = scored.avgColor[2] - existing[2];
+      return dr * dr + dg * dg + db * db < minDistSq;
+    });
+
     if (!isDuplicate) {
-      result.push(color);
+      result.push(scored.avgColor);
     }
   }
 
@@ -279,19 +295,20 @@ function extractDominantColors(pixels: RGB[], config: Required<ColorExtractionOp
  * 添加像素到直方图（带权重）
  */
 function addToHistogram(
-  histogram: Map<string, ColorBin>, 
-  key: string, 
-  hsv: HSV, 
+  histogram: Map<string, ColorBin>,
+  key: string,
+  hsv: HSV,
   weight: number
 ): void {
+  const rgb = hsvToRgb(hsv);
   if (!histogram.has(key)) {
-    histogram.set(key, { count: 0, pixels: [], originalPixels: [] });
+    histogram.set(key, { count: 0, pixels: [], originalPixels: [], avgColor: rgb });
   }
-  
+
   const bin = histogram.get(key)!;
   bin.count += weight;
   bin.pixels.push(hsv);
-  bin.originalPixels.push(hsvToRgb(hsv));
+  bin.originalPixels.push(rgb);
 }
 
 /**
